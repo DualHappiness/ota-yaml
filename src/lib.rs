@@ -251,7 +251,7 @@ impl Ota {
 impl Ota {
     fn get_host() -> Result<String> {
         inquire::Text::new("ota host")
-            .with_default("ota-beta.zelostech.com.cn")
+            .with_default("ota.zelostech.com.cn")
             .prompt()
             .map_err(|e| anyhow::anyhow!(e))
     }
