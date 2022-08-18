@@ -1,0 +1,3 @@
+misc:
+  gflags:
+    router_use_remote_route: false
