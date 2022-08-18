@@ -81,15 +81,6 @@ impl Ota {
         };
         let map: HashMap<_, _> = vehicle_names.iter().cloned().zip(vehicles.iter()).collect();
         let selected = inquire::MultiSelect::new("vehicles", vehicle_names)
-            .with_help_message(
-                r#"select vehicles to update [default all selected].
-- tap character to search.
-- use space to switch.
-- use arrow -> to select all.
-- use arrow <- to deselect all.
-- use enter to confirm.
-"#,
-            )
             .with_validator(validator)
             .prompt()?;
         tracing::debug!("vehicles: {:?}, size: {}", selected, selected.len());
@@ -157,7 +148,9 @@ impl Ota {
         self.conn.send(&req).await?;
         let str = self.conn.recv().await?;
         assert!(str.is_string());
-        let yaml: serde_yaml::Value = serde_yaml::from_str(str.as_str().unwrap())?;
+        let yaml: serde_yaml::Value = serde_yaml::from_str(str.as_str().unwrap_or("")).unwrap_or(
+            serde_yaml::Value::String("this is an empty yaml.".to_string()),
+        );
         tracing::trace!("get {} yaml: {:?}", vehicle.name, yaml);
         Ok(yaml)
     }
