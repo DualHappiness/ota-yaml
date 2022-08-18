@@ -4,16 +4,7 @@ on:
     tags:
       - "*"
 jobs:
-  test:
-    runs-on: ubuntu-latest
-    container: rust
-    steps:
-      - uses: actions/checkout@v3
-      - name: Test All
-        run: cargo test
-
   publish:
-    needs: test
     runs-on: ubuntu-latest
     steps:
       - name: Check out the repo
@@ -29,7 +20,7 @@ jobs:
         id: meta
         uses: docker/metadata-action@v3
         with:
-          images: dualwu/debuginfo-upload-server
+          images: dualwu/ota-yaml
           tags: |
             type=ref,event=tag
           flavor: |
