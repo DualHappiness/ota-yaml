@@ -3,6 +3,7 @@ use std::{collections::HashMap, io::Write};
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
 mod connection;
+use colored::*;
 use connection::{Connenction, EventType, Request};
 
 #[derive(Debug, Deserialize, Serialize, Clone)]
@@ -41,9 +42,16 @@ impl Ota {
             password: String,
             organization_id: i32,
         }
+        #[derive(Debug, Deserialize, Serialize)]
+        #[serde(rename_all = "camelCase")]
+        struct Role {
+            name: String,
+        }
         #[derive(Serialize, Deserialize, Debug)]
+        #[serde(rename_all = "camelCase")]
         struct AuthRespBody {
             id: i32,
+            role_list: Vec<Role>,
         }
         let req_body = AuthReqBody {
             username: Ota::get_username()?,
@@ -223,20 +231,92 @@ impl Ota {
         Ok(confirm)
     }
 
+    async fn publish(&self, vehicle: &Vehicle) -> Result<i32> {
+        #[derive(Debug, Serialize, Deserialize)]
+        #[serde(rename_all = "camelCase")]
+        struct RequsetBody {
+            modify_user_id: i32,
+            vehicle_id: i32,
+            bucket_name: String,
+            key: String,
+            name: String,
+            for_test: i32,
+        }
+        #[derive(Debug, Serialize, Deserialize)]
+        #[serde(rename_all = "camelCase")]
+        struct ResponseBody {
+            id: i32,
+            vehicle_id: i32,
+        }
+        let now = chrono::Local::now();
+        let name = format!(
+            "{}-{}{}-auto.tar.gz",
+            vehicle.id,
+            now.format("%Y%m%d%T"),
+            self.user_id
+        );
+
+        let req_body = RequsetBody {
+            modify_user_id: self.user_id,
+            vehicle_id: vehicle.id,
+            for_test: 1,
+            bucket_name: "zelos-config".to_string(),
+            key: name.clone(),
+            name,
+        };
+        let req = Request {
+            event_type: EventType::OtaAddConfigurePublish,
+            request_type: EventType::OtaAddConfigurePublish,
+            path_parameter: "".to_string(),
+            request_body: serde_json::to_string(&req_body)?,
+        };
+        tracing::debug!("publish with req: {:?}", req);
+        self.conn.send(&req).await?;
+        let resp_body: ResponseBody = serde_json::from_value(self.conn.recv().await?)?;
+        tracing::debug!("publish with resp: {:?}", resp_body);
+        Ok(resp_body.id)
+    }
+
     async fn process(&mut self) -> Result<()> {
-        let handle = mode::get_handle()?;
+        let auto_publish = inquire::Confirm::new("auto publish")
+            .with_default(true)
+            .prompt()?;
+
+        let mut modified = vec![];
+        let mut skipped = vec![];
+        let mut handle_map = HashMap::new();
+
         for v in &self.vehicles {
             tracing::info!("start process {}.", v.name);
-            let yaml = self.get_yaml(v).await?;
-            let new = handle.handle(self, v, &yaml)?;
-            let confirm = !self.manual || Ota::preview_confirm(&yaml, &new)?;
+            let old = self.get_yaml(v).await?;
+            let mut new = old.clone();
+            while let Some(mode) = mode::get_handle_mode()? {
+                let handle = handle_map.entry(mode).or_insert(mode::get_handle(&mode));
+                new = handle.handle(self, &v, &new)?;
+            }
+            let confirm = !self.manual || Ota::preview_confirm(&old, &new)?;
             if confirm {
-                self.save(&yaml, &new, v).await?;
+                self.save(&old, &new, v).await?;
+                if auto_publish {
+                    let _id = self.publish(v).await?;
+                    // TODO(dualwu): add confirm & push to vehicle
+                }
+                modified.push(v.name.clone());
             } else {
-                tracing::info!("skip {}", v.name);
+                tracing::warn!("skip {}", v.name);
+                skipped.push(v.name.clone());
             }
         }
         tracing::info!("process done.");
+        tracing::info!(
+            r#"
+summary:
+modified: [{}]
+skipped: [{}]
+"#,
+            modified.join(", ").color("green"),
+            skipped.join(", ").color("red"),
+        );
         Ok(())
     }
 }

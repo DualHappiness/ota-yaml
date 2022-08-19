@@ -8,6 +8,8 @@ version = "0.1.0"
 [dependencies]
 anyhow = "1.0.58"
 bytes = "1.2.1"
+chrono = "0.4.22"
+colored = "2.0.0"
 futures = "0.3.23"
 futures-channel = "0.3.23"
 futures-util = "0.3.23"
