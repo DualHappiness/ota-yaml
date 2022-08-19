@@ -33,29 +33,23 @@ impl Ota {
             .map_err(|e| anyhow::anyhow!(e))
     }
 
-    async fn auth(&mut self) -> Result<()> {
-        tracing::info!("start auth... ");
+    async fn auth_with_password(&mut self, username: &str, password: &str) -> Result<String> {
         #[derive(Serialize, Deserialize, Debug)]
         #[serde(rename_all = "camelCase")]
-        struct AuthReqBody {
-            username: String,
-            password: String,
+        struct AuthReqBody<'a> {
+            username: &'a str,
+            password: &'a str,
             organization_id: i32,
-        }
-        #[derive(Debug, Deserialize, Serialize)]
-        #[serde(rename_all = "camelCase")]
-        struct Role {
-            name: String,
         }
         #[derive(Serialize, Deserialize, Debug)]
         #[serde(rename_all = "camelCase")]
         struct AuthRespBody {
             id: i32,
-            role_list: Vec<Role>,
+            token: String,
         }
         let req_body = AuthReqBody {
-            username: Ota::get_username()?,
-            password: Ota::get_password()?,
+            username,
+            password,
             organization_id: 1,
         };
         let req = Request {
@@ -64,7 +58,7 @@ impl Ota {
             path_parameter: "".to_string(),
             request_body: serde_json::to_string(&req_body)?,
         };
-        tracing::debug!("auth with req: {:?}", req);
+        tracing::debug!("auth with password req: {:?}", req);
         self.conn.send(&req).await?;
         let resp_body: AuthRespBody =
             serde_json::from_value(self.conn.recv().await.map_err(|e| {
@@ -73,6 +67,58 @@ impl Ota {
             })?)?;
         tracing::debug!("auth resp body: {:?}", resp_body);
         self.user_id = resp_body.id;
+        Ok(resp_body.token)
+    }
+
+    async fn auth_with_token(&mut self, token_path: &std::path::Path) -> Result<()> {
+        if tokio::fs::canonicalize(token_path).await.is_err() {
+            tracing::debug!("token file not found");
+            return Err(anyhow::anyhow!("token file not found"));
+        }
+        let token = tokio::fs::read_to_string(token_path).await?;
+
+        #[derive(Serialize, Deserialize, Debug)]
+        #[serde(rename_all = "camelCase")]
+        struct AuthReqBody {
+            token: String,
+        }
+        #[derive(Serialize, Deserialize, Debug)]
+        #[serde(rename_all = "camelCase")]
+        struct AuthRespBody {
+            id: i32,
+        }
+        let req_body = AuthReqBody { token };
+        let req = Request {
+            event_type: EventType::TokenLoginRequest,
+            request_type: EventType::TokenLoginRequest,
+            path_parameter: "".to_string(),
+            request_body: serde_json::to_string(&req_body)?,
+        };
+        tracing::debug!("auth with token req: {:?}", req);
+        self.conn.send(&req).await?;
+        let resp_body: AuthRespBody = serde_json::from_value(self.conn.recv().await?)?;
+        tracing::debug!("auth resp body: {:?}", resp_body);
+        self.user_id = resp_body.id;
+        Ok(())
+    }
+
+    async fn auth(&mut self) -> Result<()> {
+        tracing::info!("start auth... ");
+
+        let user_dir =
+            directories::UserDirs::new().ok_or(anyhow::anyhow!("can't find home dir"))?;
+        let token_file = user_dir.home_dir().join(".cache/ota-yaml/token");
+        if self.auth_with_token(token_file.as_path()).await.is_ok() {
+            tracing::info!("auth with token success");
+            return Ok(());
+        }
+
+        let username = Ota::get_username()?;
+        let password = Ota::get_password()?;
+        let token = self.auth_with_password(&username, &password).await?;
+        tokio::fs::create_dir_all(token_file.parent().unwrap()).await?;
+        tokio::fs::write(token_file, token).await?;
+        tracing::info!("auth success");
         Ok(())
     }
 }
