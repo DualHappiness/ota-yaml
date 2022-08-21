@@ -1,10 +1,12 @@
 use std::{collections::HashMap, io::Write};
 
 use anyhow::Result;
-use serde::{Deserialize, Serialize};
-mod connection;
 use colored::*;
-use connection::{Connenction, EventType, Request};
+use connection::{Connenction, EventType};
+use serde::{Deserialize, Serialize};
+
+mod carside;
+mod connection;
 
 #[derive(Debug, Deserialize, Serialize, Clone)]
 #[serde(rename_all = "camelCase")]
@@ -14,7 +16,6 @@ pub struct Vehicle {
 }
 pub struct Ota {
     user_id: i32,
-    manual: bool,
     conn: Connenction,
     vehicles: Vec<Vehicle>,
 }
@@ -47,27 +48,21 @@ impl Ota {
             id: i32,
             token: String,
         }
-        let req_body = AuthReqBody {
+        let req = AuthReqBody {
             username,
             password,
             organization_id: 1,
         };
-        let req = Request {
-            event_type: EventType::LoginRequest,
-            request_type: EventType::LoginRequest,
-            path_parameter: "".to_string(),
-            request_body: serde_json::to_string(&req_body)?,
-        };
-        tracing::debug!("auth with password req: {:?}", req);
-        self.conn.send(&req).await?;
-        let resp_body: AuthRespBody =
-            serde_json::from_value(self.conn.recv().await.map_err(|e| {
-                tracing::error!("auth failed, please check usename and password.");
+        let resp: AuthRespBody = self
+            .conn
+            .request(EventType::LoginRequest, "", &req)
+            .await
+            .map_err(|e| {
+                tracing::error!("auth failed, please check username and password");
                 anyhow::anyhow!("auth error: {:?}", e)
-            })?)?;
-        tracing::debug!("auth resp body: {:?}", resp_body);
-        self.user_id = resp_body.id;
-        Ok(resp_body.token)
+            })?;
+        self.user_id = resp.id;
+        Ok(resp.token)
     }
 
     async fn auth_with_token(&mut self, token_path: &std::path::Path) -> Result<()> {
@@ -87,18 +82,12 @@ impl Ota {
         struct AuthRespBody {
             id: i32,
         }
-        let req_body = AuthReqBody { token };
-        let req = Request {
-            event_type: EventType::TokenLoginRequest,
-            request_type: EventType::TokenLoginRequest,
-            path_parameter: "".to_string(),
-            request_body: serde_json::to_string(&req_body)?,
-        };
-        tracing::debug!("auth with token req: {:?}", req);
-        self.conn.send(&req).await?;
-        let resp_body: AuthRespBody = serde_json::from_value(self.conn.recv().await?)?;
-        tracing::debug!("auth resp body: {:?}", resp_body);
-        self.user_id = resp_body.id;
+        let req = AuthReqBody { token };
+        let resp: AuthRespBody = self
+            .conn
+            .request(EventType::TokenLoginRequest, "", &req)
+            .await?;
+        self.user_id = resp.id;
         Ok(())
     }
 
@@ -156,27 +145,25 @@ impl Ota {
             list: Vec<Vehicle>,
         }
 
-        let req_body = RequestBody {
+        let req = RequestBody {
             user_id: self.user_id,
             station_id: "".to_string(),
             name: "".to_string(),
         };
-        let req = Request {
-            event_type: EventType::OtaFetchVehicleTemplateTable,
-            request_type: EventType::OtaFetchVehicleTemplateTable,
-            path_parameter: "?pageSize=10000".to_string(),
-            request_body: serde_json::to_string(&req_body)?,
-        };
-        tracing::debug!("select vehicle with req: {:?}", req);
-        self.conn.send(&req).await?;
-
-        let resp_body: ResponseBody = serde_json::from_value(self.conn.recv().await?)?;
+        let resp: ResponseBody = self
+            .conn
+            .request(
+                EventType::OtaFetchVehicleTemplateTable,
+                "?pageSize=10000",
+                &req,
+            )
+            .await?;
         tracing::info!(
             "get {} vehicles from ota, total {}",
-            resp_body.list.len(),
-            resp_body.total
+            resp.list.len(),
+            resp.total
         );
-        self.vehicles = Ota::get_vehicles(resp_body.list.as_slice())?;
+        self.vehicles = Ota::get_vehicles(resp.list.as_slice())?;
         Ok(())
     }
 }
@@ -189,18 +176,13 @@ impl Ota {
         struct RequsetBody {
             vehicle_id: i32,
         }
-        let req_body = RequsetBody {
+        let req = RequsetBody {
             vehicle_id: vehicle.id,
         };
-        let req = Request {
-            event_type: EventType::OtaFetchVehicleTemplateItemContents,
-            request_type: EventType::OtaFetchVehicleTemplateItemContents,
-            path_parameter: "".to_string(),
-            request_body: serde_json::to_string(&req_body)?,
-        };
-        tracing::debug!("get yaml with req: {:?}", req);
-        self.conn.send(&req).await?;
-        let str = self.conn.recv().await?;
+        let str: serde_json::Value = self
+            .conn
+            .request(EventType::OtaFetchVehicleTemplateItemContents, "", &req)
+            .await?;
         assert!(str.is_string());
         let yaml: serde_yaml::Value = serde_yaml::from_str(str.as_str().unwrap_or("")).unwrap_or(
             serde_yaml::Value::String("this is an empty yaml.".to_string()),
@@ -229,24 +211,20 @@ impl Ota {
             ok: bool,
             message: Option<String>,
         }
-        let req_body = RequsetBody {
+        let req = RequsetBody {
             user_id: self.user_id,
             vehicle_id: vehicle.id,
             old_config: serde_yaml::to_string(old)?,
             new_config: serde_yaml::to_string(new)?,
         };
-        let req = Request {
-            event_type: EventType::OtaAddVehicleTemplateItem,
-            request_type: EventType::OtaAddVehicleTemplateItem,
-            path_parameter: "".to_string(),
-            request_body: serde_json::to_string(&req_body)?,
-        };
-        self.conn.send(&req).await?;
-        let resp_body: ResponseBody = serde_json::from_value(self.conn.recv().await?)?;
-        if resp_body.ok {
+        let resp: ResponseBody = self
+            .conn
+            .request(EventType::OtaAddVehicleTemplateItem, "", &req)
+            .await?;
+        if resp.ok {
             tracing::info!("save {} success", vehicle.name);
         } else {
-            tracing::error!("save {} failed: {:?}", vehicle.name, resp_body.message);
+            tracing::error!("save {} failed: {:?}", vehicle.name, resp.message);
         }
         Ok(())
     }
@@ -277,56 +255,17 @@ impl Ota {
         Ok(confirm)
     }
 
-    async fn publish(&self, vehicle: &Vehicle) -> Result<i32> {
-        #[derive(Debug, Serialize, Deserialize)]
-        #[serde(rename_all = "camelCase")]
-        struct RequsetBody {
-            modify_user_id: i32,
-            vehicle_id: i32,
-            bucket_name: String,
-            key: String,
-            name: String,
-            for_test: i32,
-        }
-        #[derive(Debug, Serialize, Deserialize)]
-        #[serde(rename_all = "camelCase")]
-        struct ResponseBody {
-            id: i32,
-            vehicle_id: i32,
-        }
-        let now = chrono::Local::now();
-        let name = format!(
-            "{}-{}{}-auto.tar.gz",
-            vehicle.id,
-            now.format("%Y%m%d%T"),
-            self.user_id
-        );
-
-        let req_body = RequsetBody {
-            modify_user_id: self.user_id,
-            vehicle_id: vehicle.id,
-            for_test: 1,
-            bucket_name: "zelos-config".to_string(),
-            key: name.clone(),
-            name,
-        };
-        let req = Request {
-            event_type: EventType::OtaAddConfigurePublish,
-            request_type: EventType::OtaAddConfigurePublish,
-            path_parameter: "".to_string(),
-            request_body: serde_json::to_string(&req_body)?,
-        };
-        tracing::debug!("publish with req: {:?}", req);
-        self.conn.send(&req).await?;
-        let resp_body: ResponseBody = serde_json::from_value(self.conn.recv().await?)?;
-        tracing::debug!("publish with resp: {:?}", resp_body);
-        Ok(resp_body.id)
+    fn get_manual() -> Result<bool> {
+        inquire::Confirm::new("manual")
+            .with_help_message("need to confirm all edit mannually")
+            .with_default(true)
+            .prompt()
+            .map_err(|e| anyhow::anyhow!(e))
     }
 
     async fn process(&mut self) -> Result<()> {
-        let auto_publish = inquire::Confirm::new("auto publish")
-            .with_default(true)
-            .prompt()?;
+        let manual = Ota::get_manual()?;
+        let carside = carside::Carside::new()?;
 
         let mut modified = vec![];
         let mut skipped = vec![];
@@ -340,13 +279,9 @@ impl Ota {
                 let handle = handle_map.entry(mode).or_insert(mode::get_handle(&mode));
                 new = handle.handle(self, &v, &new)?;
             }
-            let confirm = !self.manual || Ota::preview_confirm(&old, &new)?;
-            if confirm {
+            if !manual || Ota::preview_confirm(&old, &new)? {
                 self.save(&old, &new, v).await?;
-                if auto_publish {
-                    let _id = self.publish(v).await?;
-                    // TODO(dualwu): add confirm & push to vehicle
-                }
+                carside.process(self, v).await?;
                 modified.push(v.name.clone());
             } else {
                 tracing::warn!("skip {}", v.name);
@@ -375,21 +310,12 @@ impl Ota {
             .map_err(|e| anyhow::anyhow!(e))
     }
 
-    fn get_confirm() -> Result<bool> {
-        inquire::Confirm::new("manual")
-            .with_help_message("need to confirm all edit mannually")
-            .with_default(true)
-            .prompt()
-            .map_err(|e| anyhow::anyhow!(e))
-    }
-
     pub async fn run() -> Result<()> {
         let host = Ota::get_host()?;
         let port = 8090;
         let path = "/user_client";
         let mut ota = Ota {
             user_id: -1,
-            manual: Ota::get_confirm()?,
             conn: Connenction::new(&host, port, path).await?,
             vehicles: vec![],
         };

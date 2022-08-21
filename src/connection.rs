@@ -1,7 +1,7 @@
 use anyhow::Result;
 use futures::{StreamExt, TryStreamExt};
 use futures_channel::mpsc::{UnboundedReceiver, UnboundedSender};
-use serde::{Deserialize, Serialize};
+use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use std::sync::Arc;
 use tokio::sync::RwLock;
 use tokio_tungstenite::{connect_async, tungstenite::protocol::Message};
@@ -61,7 +61,7 @@ impl Connenction {
     }
 }
 
-#[derive(Serialize, Deserialize, Debug)]
+#[derive(Serialize, Deserialize, Debug, Clone, Copy)]
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
 pub enum EventType {
     TokenLoginRequest,
@@ -75,7 +75,7 @@ pub enum EventType {
 
 #[derive(Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
-pub struct Request {
+struct Request {
     pub event_type: EventType,
     pub request_type: EventType,
     pub path_parameter: String,
@@ -92,13 +92,13 @@ struct Response {
 }
 
 impl Connenction {
-    pub async fn send(&self, req: &Request) -> Result<()> {
+    async fn send(&self, req: &Request) -> Result<()> {
         let msg = Message::Text(serde_json::to_string(req)?);
         self.tx.unbounded_send(msg)?;
         Ok(())
     }
 
-    pub async fn recv(&self) -> Result<serde_json::Value> {
+    async fn recv(&self) -> Result<serde_json::Value> {
         let mut rx = self.rx.write().await;
         let resp: Response = serde_json::from_str(
             &rx.next()
@@ -118,5 +118,26 @@ impl Connenction {
             return Err(anyhow::anyhow!("no data"));
         }
         Ok(resp.data.unwrap())
+    }
+}
+
+impl Connenction {
+    pub async fn request<'de, T, D>(&self, event_type: EventType, path: &str, body: &T) -> Result<D>
+    where
+        T: Serialize + std::fmt::Debug,
+        D: DeserializeOwned + std::fmt::Debug,
+    {
+        let req = Request {
+            event_type,
+            request_type: event_type,
+            path_parameter: path.to_string(),
+            request_body: serde_json::to_string(body)?,
+        };
+        tracing::debug!("request with req: {:?}", req);
+        self.send(&req).await?;
+        let value = self.recv().await?;
+        let resp: D = serde_json::from_value(value)?;
+        tracing::debug!("request with resp: {:?}", resp);
+        Ok(resp)
     }
 }
