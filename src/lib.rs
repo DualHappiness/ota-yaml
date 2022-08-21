@@ -94,13 +94,14 @@ impl Ota {
     async fn auth(&mut self) -> Result<()> {
         tracing::info!("start auth... ");
 
+        // TODO(dualwu): don't use token util can reconnect automatically
         let user_dir =
             directories::UserDirs::new().ok_or(anyhow::anyhow!("can't find home dir"))?;
         let token_file = user_dir.home_dir().join(".cache/ota-yaml/token");
-        if self.auth_with_token(token_file.as_path()).await.is_ok() {
-            tracing::info!("auth with token success");
-            return Ok(());
-        }
+        // if self.auth_with_token(token_file.as_path()).await.is_ok() {
+        //     tracing::info!("auth with token success");
+        //     return Ok(());
+        // }
 
         let username = Ota::get_username()?;
         let password = Ota::get_password()?;
@@ -265,7 +266,7 @@ impl Ota {
 
     async fn process(&mut self) -> Result<()> {
         let manual = Ota::get_manual()?;
-        let carside = carside::Carside::new()?;
+        let mut carside = carside::Carside::new()?;
 
         let mut modified = vec![];
         let mut skipped = vec![];

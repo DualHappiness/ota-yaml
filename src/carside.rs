@@ -3,15 +3,18 @@ use serde::{Deserialize, Serialize};
 
 use crate::connection::EventType;
 
+#[derive(Debug, Deserialize, Serialize, PartialEq, Eq, Clone, Copy)]
 enum PushType {
     None,
+    #[serde(rename = "UPGRADE_SELIENT")]
     Slient,
+    #[serde(rename = "UPGRADE_ENFORCE")]
     Force,
 }
 impl std::fmt::Display for PushType {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         match self {
-            PushType::None => write!(f, "none"),
+            PushType::None => write!(f, "not push"),
             PushType::Slient => write!(f, "slient"),
             PushType::Force => write!(f, "force"),
         }
@@ -20,6 +23,7 @@ impl std::fmt::Display for PushType {
 pub struct Carside {
     auto_publish: bool,
     push_type: PushType,
+    can_approve: bool,
 }
 
 impl Carside {
@@ -34,6 +38,7 @@ impl Carside {
         let mut carside = Carside {
             auto_publish: Carside::get_auto_publish()?,
             push_type: PushType::None,
+            can_approve: true,
         };
 
         if carside.auto_publish {
@@ -88,9 +93,74 @@ impl Carside {
         Ok(resp.id)
     }
 
-    pub async fn process(&self, ota: &super::Ota, vehicle: &super::Vehicle) -> Result<()> {
+    async fn approve(&self, ota: &super::Ota, conf_id: i32) -> Result<bool> {
+        #[derive(Debug, Serialize, Deserialize)]
+        #[serde(rename_all = "camelCase")]
+        struct ReqBody {
+            id: i32,
+            is_approve: bool,
+            approver_id: i32,
+        }
+        #[derive(Debug, Serialize, Deserialize)]
+        struct ResponseBody {
+            ok: bool,
+        }
+        let req = ReqBody {
+            id: conf_id,
+            is_approve: true,
+            approver_id: ota.user_id,
+        };
+
+        let resp: ResponseBody = ota
+            .conn
+            .request(EventType::OtaEditConfigurePublish, "", &req)
+            .await?;
+        Ok(resp.ok)
+    }
+
+    async fn push(&self, ota: &super::Ota, vehicle: &super::Vehicle, conf_id: i32) -> Result<bool> {
+        #[derive(Debug, Serialize, Deserialize)]
+        #[serde(rename_all = "camelCase")]
+        struct ReqBody {
+            vehicle_id: i32,
+            modify_user_id: i32,
+            vehicle_zelos_configure_build_history_id: i32,
+            command_type: PushType,
+        }
+        #[derive(Debug, Serialize, Deserialize)]
+        struct ResponseBody {
+            ok: bool,
+        }
+        let req = ReqBody {
+            vehicle_id: vehicle.id,
+            modify_user_id: ota.user_id,
+            vehicle_zelos_configure_build_history_id: conf_id,
+            command_type: self.push_type,
+        };
+        let resp: ResponseBody = ota
+            .conn
+            .request(EventType::OtaConfigurePublish, "", &req)
+            .await?;
+        Ok(resp.ok)
+    }
+
+    pub async fn process(&mut self, ota: &super::Ota, vehicle: &super::Vehicle) -> Result<()> {
         if self.auto_publish {
-            self.publish(ota, vehicle).await?;
+            let conf_id = self.publish(ota, vehicle).await?;
+            self.can_approve = self.can_approve && self.approve(ota, conf_id).await?;
+            if self.push_type != PushType::None {
+                if !self.can_approve {
+                    tracing::warn!(
+                        "skip push {} to {}, because can not approve",
+                        conf_id,
+                        vehicle.id
+                    );
+                } else if self.push(ota, vehicle, conf_id).await? {
+                    tracing::info!("success push {} to {}", conf_id, vehicle.id);
+                } else {
+                    tracing::error!("push conf {} to {} faild.", conf_id, vehicle.id);
+                }
+            }
         }
         Ok(())
     }

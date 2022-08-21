@@ -71,6 +71,8 @@ pub enum EventType {
     OtaFetchVehicleTemplateItemContents,
     OtaAddVehicleTemplateItem,
     OtaAddConfigurePublish,
+    OtaEditConfigurePublish,
+    OtaConfigurePublish,
 }
 
 #[derive(Debug, Deserialize, Serialize)]
