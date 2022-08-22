@@ -114,9 +114,9 @@ impl Data {
             } else {
                 for i in (0..std::cmp::max(old_seq.len(), new_seq.len())).rev() {
                     path.push(PathKey::Index(i));
-                    if i > old_seq.len() {
+                    if i >= old_seq.len() {
                         diff.push(Operation::Add(path.clone(), new_seq[i].clone()));
-                    } else if i > new_seq.len() {
+                    } else if i >= new_seq.len() {
                         diff.push(Operation::Del(path.clone(), old_seq[i].clone()));
                     } else {
                         Data::recurse_diff(&old_seq[i], &new_seq[i], path, diff)?;
