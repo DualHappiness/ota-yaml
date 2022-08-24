@@ -72,9 +72,9 @@ impl Carside {
         }
         let now = chrono::Local::now();
         let name = format!(
-            "{}-{}{}-auto.tar.gz",
+            "{}-{}{}-a.tar.gz",
             vehicle.name,
-            now.format("%Y%m%d%T"),
+            now.format("%Y%m%d%%H%M%S"),
             ota.user_id
         );
 
