@@ -5,9 +5,9 @@ use colored::*;
 use connection::{Connenction, EventType};
 use serde::{Deserialize, Serialize};
 
+mod auth;
 mod carside;
 mod connection;
-mod auth;
 
 #[derive(Debug, Deserialize, Serialize, Clone)]
 #[serde(rename_all = "camelCase")]
@@ -160,7 +160,8 @@ impl Ota {
             .prompt()?;
         let confirm = inquire::Confirm::new("confirm")
             .with_default(true)
-            .prompt()?;
+            .prompt_skippable()?
+            .unwrap_or(false);
         Ok(confirm)
     }
 

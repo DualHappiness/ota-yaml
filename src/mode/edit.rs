@@ -61,17 +61,19 @@ impl Data {
             let new_map = new.as_mapping().unwrap();
 
             for (key, value) in new_map.iter() {
+                path.push(PathKey::Key(key.clone()));
                 if old_map.contains_key(key) {
-                    path.push(PathKey::Key(key.clone()));
                     Data::recurse_diff(&old_map[key], value, path, diff)?;
-                    path.pop();
                 } else {
                     diff.push(Operation::Add(path.clone(), value.clone()));
                 }
+                path.pop();
             }
             for (key, value) in old_map.iter() {
                 if !new_map.contains_key(key) {
+                    path.push(PathKey::Key(key.clone()));
                     diff.push(Operation::Del(path.clone(), value.clone()));
+                    path.pop();
                 }
             }
         } else if new.is_sequence() {
@@ -206,6 +208,7 @@ impl super::YamlHandle for Data {
                 .with_default(true)
                 .prompt()?
         {
+            tracing::debug!("redoing last edit, {:?}", self.diff);
             yaml = Data::apply(&yaml, self.diff.as_ref().unwrap())?;
         } else {
             let edited = inquire::Editor::new(&format!("edit {} yaml", vehicle.name))
